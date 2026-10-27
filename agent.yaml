@@ -23,4 +23,4 @@ environment_variables:
   - name: TOOLBOX_NAME
     # Toolbox name in the same Foundry project; endpoint is resolved from
     # FOUNDRY_PROJECT_ENDPOINT (auto-injected by the Foundry hosting runtime).
-    value: "fibey"
+    value: "fibey/versions/2"

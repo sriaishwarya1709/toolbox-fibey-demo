@@ -26,7 +26,7 @@ flowchart LR
     subgraph Foundry["Microsoft Foundry project: toolbox-demo"]
         HA["Hosted agent: fibey-agent<br/>Agent Framework ResponsesHostServer<br/>+ 5 skills (load_skill)"]
         M["Model deployment<br/>gpt-4.1"]
-        TB["Foundry Toolbox: fibey<br/>single MCP endpoint"]
+        TB["Foundry Toolbox: fibey (v2)<br/>single MCP endpoint<br/>tool search: tool_search + call_tool"]
         CONN["Connection: fibey-search<br/>(CognitiveSearch, API key)"]
         HA -- "chat completions" --> M
         HA -- "MCP (streamable HTTP)" --> TB
@@ -57,8 +57,12 @@ sequenceDiagram
     HA-->>GW: response.output_item.added (function_call)
     GW-->>UI: SSE activity: Load Skill (running)
     HA->>LLM: skill instructions
-    LLM-->>HA: function_call inventory___search_parts
-    HA->>TB: MCP tools/call
+    LLM-->>HA: function_call tool_search("splice tray stock")
+    HA->>TB: MCP tools/call tool_search
+    TB-->>HA: matching tools (inventory___search_parts, inventory___check_stock, ...)
+    GW-->>UI: SSE activity: Tool Search (tools found)
+    LLM-->>HA: function_call call_tool(inventory___search_parts, {query})
+    HA->>TB: MCP tools/call call_tool
     TB->>BE: MCP / HTTP call to the backing service
     BE-->>TB: result
     TB-->>HA: tool result
@@ -79,16 +83,24 @@ sequenceDiagram
 3. The **hosted agent** (`src/fibey/agent/hosted.py`) runs Microsoft Agent
    Framework inside Foundry. It loads the system prompt and the skills, calls
    `gpt-4.1`, and executes tool calls against the Toolbox MCP endpoint.
-4. The **Toolbox** exposes every backend as MCP tools behind one URL and one
-   auth boundary, and dispatches each call to the right backend.
+4. The **Toolbox** exposes every backend behind one URL and one auth
+   boundary, and dispatches each call to the right backend.
+5. **Tool search** is enabled, so the agent's initial tool list contains
+   only `tool_search` and `call_tool` (plus `load_skill`). For each turn the
+   agent searches the Toolbox with a natural-language query, gets back just
+   the matching tools and their schemas, then invokes the chosen one through
+   `call_tool`. The gateway unwraps `call_tool` so the Activity sidebar shows
+   the real tool name, and the **Tool Search** entry lists the tools found.
+   This keeps the model's context small even as the Toolbox grows.
 
 ## Tools and data behind the Toolbox
 
-| Toolbox tool | Type | Backend | Tools exposed to the agent |
+| Toolbox tool | Type | Backend | Tools discoverable through `tool_search` |
 |---|---|---|---|
 | `inventory` | MCP (streamable HTTP) | `services/inventory-mcp` on Container Apps | `inventory___search_parts`, `inventory___list_parts`, `inventory___get_part_details`, `inventory___check_stock`, `inventory___check_stock_batch` |
 | `work_orders` | OpenAPI | `services/work-orders-api` on Container Apps | `work_orders___list_work_orders_*`, `work_orders___get_work_order_*`, `work_orders___create_work_order_*`, `work_orders___update_work_order_*`, `work_orders___health_check_*` |
-| `azure_ai_search` | Azure AI Search | Index `foundry-iq-docs-index` via connection `fibey-search` | `azure_ai_search` (semantic search over the knowledge base) |
+| `knowledge_base` | Azure AI Search | Index `foundry-iq-docs-index` via connection `fibey-search` | `knowledge_base` (semantic search over the knowledge base) |
+| `toolbox_search` | Tool search | Foundry Toolbox | Exposes `tool_search` and `call_tool` instead of the full tool list |
 
 ### Inventory MCP — `services/inventory-mcp/data/inventory.json`
 
@@ -173,11 +185,12 @@ Toolbox publishes none (as in this deployment).
 
 ## Test results (deployed, through the UI)
 
-| Prompt | Tools the agent called (Activity sidebar) | Result |
+| Prompt | Activity sidebar (tool search mode) | Result |
 |---|---|---|
-| Check stock for splice trays | Load Skill (`inventory-lookup`) → Knowledge Base → Search Parts → Check Stock (Batch) | Splice trays listed with stock status, quantity, and warehouse location |
-| What PPE do I need for fusion splicing? | Load Skill (`knowledge-retrieval`) → Knowledge Base | Safety glasses, fiber-safe gloves, shard bottle — from `safety-protocols.md` |
-| List open high priority work orders | Load Skill (`work-order-management`) → Knowledge Base → List Work Orders | Table of open high/critical work orders with technician, location, and due date |
+| Check stock for splice trays | Load Skill (`inventory-lookup`) → Tool Search (finds 5 inventory tools) → Search Parts → Check Stock | Fusion Splice Tray 24-Core (FIB-012): in stock, 56 units at WH-D1 |
+| What PPE do I need for fusion splicing? | Load Skill (`knowledge-retrieval`) → Tool Search (finds `knowledge_base`) → Knowledge Base | Safety glasses, fiber-safe gloves, shard bottle — from `safety-protocols.md` |
+| List open high priority work orders | Load Skill (`work-order-management`) → Tool Search (finds work-order tools) → List Work Orders (`status=open, priority=high`) | Table of open high-priority work orders with technician, location, and due date |
+| How do I troubleshoot high splice loss? | Load Skill (`knowledge-retrieval`) → Tool Search (finds `knowledge_base`) → Knowledge Base | Causes (bad cleaves, contamination, splicer settings) and fixes from `troubleshooting-guide.md` |
 
 > Tip: start a new chat for each demo prompt. The hosted agent runs with
 > `store: False`, so it does not keep conversation history between turns.
@@ -187,9 +200,9 @@ Toolbox publishes none (as in this deployment).
 | Resource | Name | Notes |
 |---|---|---|
 | Foundry account / project | `toolbox-demo-smasina` / `toolbox-demo` (rg `rg-toolbox-demo`, Sweden Central) | Hosts the agent, model, toolbox, and connection |
-| Hosted agent | `fibey-agent` (version 1) | Image `acrfibey36442.azurecr.io/fibey-hosted-agent:v1`, env `AZURE_AI_MODEL_DEPLOYMENT_NAME=gpt-4.1`, `TOOLBOX_NAME=fibey` |
+| Hosted agent | `fibey-agent` — **version 3 serves 100% of traffic** | Image `acrfibey36442.azurecr.io/fibey-hosted-agent:v2`, env `AZURE_AI_MODEL_DEPLOYMENT_NAME=gpt-4.1`, `TOOLBOX_NAME=fibey/versions/2`. Version 1 = no tool search (toolbox v1); version 2 = tool search with the original prompt |
 | Model deployment | `gpt-4.1` (GlobalStandard) | Used by the agent |
-| Foundry Toolbox | `fibey` (version 1) | Tools: `inventory` (MCP), `work_orders` (OpenAPI), `azure_ai_search` |
+| Foundry Toolbox | `fibey` — versions 1, 2, 3 (default 1) | **v2 (used):** `inventory`, `work_orders`, `knowledge_base`, `toolbox_search`. v1: same tools without tool search. v3: v2 plus a longer `knowledge_base` description (its search index was not ready at test time) |
 | Project connection | `fibey-search` | CognitiveSearch, API key, used by the `azure_ai_search` tool |
 | Resource group | `rg-fibey-demo` (Sweden Central) | Container Apps environment `fibey-cae`, registry `acrfibey36442` |
 | Container Apps | `fibey-ui`, `fibey-gateway`, `fibey-inventory-mcp`, `fibey-work-orders-api`, `fibey-status-dashboard`, `fibey-agent-service` | `fibey-agent-service` is the self-hosted fallback agent |
@@ -203,6 +216,15 @@ az containerapp update -g rg-fibey-demo -n fibey-gateway --set-env-vars AGENT_MO
 az containerapp update -g rg-fibey-demo -n fibey-gateway --set-env-vars AGENT_MODE=hosted         # Foundry hosted agent
 ```
 
+**Turning tool search off:** route the hosted agent back to version 1
+(direct tools, no tool search) with the SDK:
+
+```python
+project.agents.update_details(agent_name="fibey-agent", agent_endpoint=AgentEndpointConfig(
+    version_selector=VersionSelector(version_selection_rules=[
+        FixedRatioVersionSelectionRule(agent_version="1", traffic_percentage=100)])))
+```
+
 ## Changes from the upstream sample
 
 - **Hosted agent image** (`Dockerfile.agent`) and **agent service image**
@@ -213,6 +235,13 @@ az containerapp update -g rg-fibey-demo -n fibey-gateway --set-env-vars AGENT_MO
 - **`hosted.py`** falls back to the bundled skill files when the Toolbox
   publishes no skills.
 - **`agent.py`** fixed an `UnboundLocalError` (`_json`) in the streaming loop.
+- **Tool search:** the Toolbox uses `toolbox_search`. The system prompt tells
+  the agent to include "knowledge base" in its search for knowledge
+  questions (topic-only queries did not match the knowledge base tool). The
+  gateway's hosted mode unwraps `call_tool` and attaches `tool_search`
+  results for the Activity sidebar.
+- **`TOOLBOX_NAME`** may include a version (`fibey/versions/2`) to pin the
+  agent to a specific Toolbox version.
 - **Gateway hosted mode** keeps the tool name and arguments on completion
   events so the Activity sidebar shows each step; the UI labels
   `azure_ai_search` as **Knowledge Base**.

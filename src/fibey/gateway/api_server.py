@@ -227,6 +227,15 @@ async def _run_hosted(message: str, session_id: str) -> AsyncGenerator[str, None
                             if item_type == "function_call":
                                 tool_name = item.get("name") or call_names.get(call_id, "tool")
                                 args = item.get("arguments", "") or call_args.get(call_id, "")
+                                # Toolbox tool-search mode wraps the real tool in call_tool {name, arguments}
+                                if tool_name == "call_tool":
+                                    try:
+                                        wrapped = json.loads(args) if args else {}
+                                    except ValueError:
+                                        wrapped = {}
+                                    if isinstance(wrapped, dict) and wrapped.get("name"):
+                                        tool_name = wrapped["name"]
+                                        args = json.dumps(wrapped.get("arguments") or {})
                                 call_names[call_id] = tool_name
                                 call_args[call_id] = args
                                 yield _sse("activity", {
@@ -263,12 +272,24 @@ async def _run_hosted(message: str, session_id: str) -> AsyncGenerator[str, None
                             elif item_type in ("mcp_call_output", "function_call_output"):
                                 output = item.get("output", "")
                                 tool_name = call_names.get(call_id, "")
+                                discovered = []
+                                if tool_name == "tool_search":
+                                    try:
+                                        parsed_out = json.loads(output) if isinstance(output, str) else output
+                                        discovered = [
+                                            {"name": t.get("name", ""), "description": (t.get("description") or "").split("\n")[0][:200]}
+                                            for t in (parsed_out or {}).get("tools", [])
+                                            if isinstance(t, dict) and t.get("name")
+                                        ]
+                                    except (ValueError, AttributeError):
+                                        discovered = []
                                 yield _sse("activity", {
                                     "tool": tool_name,
                                     "call_id": call_id,
                                     "status": "complete",
                                     "detail": f"Completed {tool_name}" if tool_name else "Done",
                                     "args": call_args.get(call_id, ""),
+                                    "results": discovered,
                                     "result": output[:2000] if isinstance(output, str) else json.dumps(output)[:2000],
                                 })
 
