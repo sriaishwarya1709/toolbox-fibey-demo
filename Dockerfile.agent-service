@@ -7,14 +7,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy project files
-COPY pyproject.toml ./
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /bin/
+
+# Install pinned dependencies from uv.lock (unpinned agent-framework releases break tool calling)
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
 COPY src/ ./src/
 
-# Install the package and all its dependencies
-RUN pip install --no-cache-dir -e .
-
-# Set Python path to include src
+ENV PATH=/app/.venv/bin:$PATH
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
 

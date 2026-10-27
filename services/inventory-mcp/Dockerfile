@@ -8,7 +8,7 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir uv
 
-COPY pyproject.toml ./pyproject.toml
+COPY pyproject.toml uv.lock ./
 RUN uv sync --no-dev
 
 COPY server.py ./server.py
