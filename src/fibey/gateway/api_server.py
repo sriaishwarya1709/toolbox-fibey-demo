@@ -126,6 +126,21 @@ async def _run_hosted(message: str, session_id: str) -> AsyncGenerator[str, None
         body["previous_response_id"] = agent_session_id
 
     seen_call_ids: set[str] = set()
+    call_names: dict[str, str] = {}
+    call_args: dict[str, str] = {}
+
+    def _call_detail(name: str, args: str) -> str:
+        try:
+            parsed = json.loads(args) if args else {}
+        except ValueError:
+            parsed = {}
+        if isinstance(parsed, dict):
+            if name == "load_skill" and parsed.get("skill_name"):
+                return f"Loading skill: {parsed['skill_name']}"
+            for key in ("work_order_id", "part_id", "query", "search"):
+                if parsed.get(key):
+                    return f"Calling {name} ({key}={parsed[key]})"
+        return f"Calling {name}"
 
     debug_events = os.getenv("HOSTED_DEBUG_EVENTS", "0") == "1"
     timeout_s = float(os.getenv("HOSTED_TIMEOUT_SECONDS", "600"))
@@ -192,6 +207,8 @@ async def _run_hosted(message: str, session_id: str) -> AsyncGenerator[str, None
                                 seen_call_ids.add(call_id)
                                 tool_name = item.get("name", "tool")
                                 args = item.get("arguments", "")
+                                call_names[call_id] = tool_name
+                                call_args[call_id] = args
                                 yield _sse("activity", {
                                     "tool": tool_name,
                                     "call_id": call_id,
@@ -207,7 +224,20 @@ async def _run_hosted(message: str, session_id: str) -> AsyncGenerator[str, None
                             item_type = item.get("type", "")
                             call_id = item.get("call_id", "") or item.get("id", "")
 
-                            if item_type == "mcp_call":
+                            if item_type == "function_call":
+                                tool_name = item.get("name") or call_names.get(call_id, "tool")
+                                args = item.get("arguments", "") or call_args.get(call_id, "")
+                                call_names[call_id] = tool_name
+                                call_args[call_id] = args
+                                yield _sse("activity", {
+                                    "tool": tool_name,
+                                    "call_id": call_id,
+                                    "status": "running",
+                                    "detail": _call_detail(tool_name, args),
+                                    "args": args,
+                                    "result": "",
+                                })
+                            elif item_type == "mcp_call":
                                 # MCP call output is on the mcp_call item itself
                                 output = item.get("output", "") or item.get("result", "")
                                 error = item.get("error")
@@ -232,12 +262,13 @@ async def _run_hosted(message: str, session_id: str) -> AsyncGenerator[str, None
                                     })
                             elif item_type in ("mcp_call_output", "function_call_output"):
                                 output = item.get("output", "")
+                                tool_name = call_names.get(call_id, "")
                                 yield _sse("activity", {
-                                    "tool": "",
+                                    "tool": tool_name,
                                     "call_id": call_id,
                                     "status": "complete",
-                                    "detail": "Done",
-                                    "args": "",
+                                    "detail": f"Completed {tool_name}" if tool_name else "Done",
+                                    "args": call_args.get(call_id, ""),
                                     "result": output[:2000] if isinstance(output, str) else json.dumps(output)[:2000],
                                 })
 

@@ -26,7 +26,7 @@ function parseToolInfo(raw: string): { name: string; icon: string; category: str
   }
 
   // Knowledge base
-  if (lower === "knowledge_base" || lower.includes("knowledge_base")) {
+  if (lower === "knowledge_base" || lower.includes("knowledge_base") || lower === "azure_ai_search") {
     return { name: "Knowledge Base", icon: "menu_book", category: "knowledge", source: "FoundryIQ" };
   }
 
