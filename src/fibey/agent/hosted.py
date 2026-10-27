@@ -19,6 +19,7 @@ import httpx
 import mcp.types
 from agent_framework import (
     Agent,
+    FileSkillsSource,
     InMemorySkillsSource,
     MCPStreamableHTTPTool,
     SkillsProvider,
@@ -37,6 +38,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT_PATH = Path(__file__).parent / "prompts" / "system_prompt.md"
+SKILLS_PATH = Path(__file__).parent / "skills"
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +127,11 @@ async def _build_skills_provider(token_provider) -> SkillsProvider | None:
         if skills:
             logger.info("Loaded %d skill(s) from toolbox", len(skills))
             return SkillsProvider(InMemorySkillsSource(skills))
-        logger.warning("Toolbox returned no skills; running without skills")
+        logger.warning("Toolbox returned no skills; falling back to bundled skill files")
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Failed to load MCP skills (%s); running without skills", exc)
+        logger.warning("Failed to load MCP skills (%s); falling back to bundled skill files", exc)
+    if SKILLS_PATH.is_dir():
+        return SkillsProvider(FileSkillsSource(SKILLS_PATH))
     return None
 
 
