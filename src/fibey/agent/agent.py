@@ -11,6 +11,7 @@ as a fallback.
 import asyncio
 import os
 import json
+import json as _json
 import logging
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -322,7 +323,6 @@ async def run_agent(message: str, session: dict) -> AsyncGenerator[dict, None]:
                         # Accumulate arguments across streaming chunks
                         raw_args = getattr(content, "arguments", None) or ""
                         if isinstance(raw_args, dict):
-                            import json as _json
                             raw_args = _json.dumps(raw_args)
                         if call_id not in pending_args:
                             pending_args[call_id] = raw_args
@@ -398,7 +398,6 @@ async def run_agent(message: str, session: dict) -> AsyncGenerator[dict, None]:
                     elif ctype in ("mcp_server_tool_result", "function_result"):
                         call_id = getattr(content, "call_id", None) or ""
                         tool_name = call_id_to_name.get(call_id) or getattr(content, "tool_name", None) or getattr(content, "name", None) or "tool"
-                        import json as _json
 
                         # Log tool results so we can diagnose error/retry paths and
                         # verify the model is actually seeing what the toolbox returns.
